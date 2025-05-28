@@ -38,12 +38,12 @@ class DronePlanner:
             'Porto Alegre': (-30.0346, -51.2177)
         }
         
-        # Create a dictionary of all cities with their coordinates
-        self.cities = {
+        # Create a dictionary of all flooded cities with their coordinates
+        self.flooded_cities = {
             row['localidade']: (row['lat'], row['lng'])
             for _, row in self.df.iterrows()
         }
-        
+
         # Estimate average cities per leg (can be adjusted based on data analysis)
         self.estimated_cities_per_leg = 3
 
@@ -88,7 +88,7 @@ class DronePlanner:
 
     def get_possible_legs(self, current_capital: str, visited_cities: FrozenSet[str]) -> List[Tuple[str, Set[str], float, timedelta]]:
         """
-        Generate possible legs from current capital to other capitals, visiting unvisited cities.
+        Generate possible legs from current capital to other capitals, visiting unvisited flooded cities.
         
         Args:
             current_capital: Name of the current capital
@@ -105,8 +105,8 @@ class DronePlanner:
             if next_capital == current_capital:
                 continue
                 
-            # Get unvisited cities
-            unvisited = set(self.cities.keys()) - visited_cities
+            # Get unvisited flooded cities
+            unvisited = set(self.flooded_cities.keys()) - visited_cities
             
             # Try to find cities that can be visited along the way
             cities_to_visit = set()
@@ -115,12 +115,12 @@ class DronePlanner:
             # Sort cities by distance from current capital
             sorted_cities = sorted(
                 unvisited,
-                key=lambda city: self.haversine_distance(current_coord, self.cities[city])
+                key=lambda city: self.haversine_distance(current_coord, self.flooded_cities[city])
             )
             
             # Try to add cities that don't exceed max range
             for city in sorted_cities:
-                city_coord = self.cities[city]
+                city_coord = self.flooded_cities[city]
                 
                 # Calculate new total distance if we add this city
                 new_distance = (
@@ -150,7 +150,7 @@ class DronePlanner:
         Returns:
             Estimated number of remaining legs
         """
-        remaining_cities = len(self.cities) - len(visited_cities)
+        remaining_cities = len(self.flooded_cities) - len(visited_cities)
         return ceil(remaining_cities / self.estimated_cities_per_leg)
 
     def find_optimal_route(self, start_capital: str) -> Tuple[List[Tuple[str, Set[str], float, timedelta]], int]:
@@ -256,7 +256,7 @@ class DronePlanner:
         for i, (capital, cities_visited, distance, flight_time) in enumerate(route):
             # Add cities
             for city in cities_visited:
-                coord = self.cities[city]
+                coord = self.flooded_cities[city]
                 folium.Marker(
                     coord,
                     popup=f"City: {city}",
