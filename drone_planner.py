@@ -233,6 +233,22 @@ class DronePlanner:
         route.reverse()
         return route, best_cities_visited
 
+    def _nearest_neighbor_order(self, start_coord, cities_coords):
+        """
+        Ordena as cidades pelo caminho mais próximo (nearest neighbor) a partir de start_coord.
+        """
+        if not cities_coords:
+            return []
+        ordered = []
+        current = start_coord
+        remaining = cities_coords.copy()
+        while remaining:
+            next_city = min(remaining, key=lambda c: self.haversine_distance(current, c))
+            ordered.append(next_city)
+            remaining.remove(next_city)
+            current = next_city
+        return ordered
+
     def visualize_route(self, route: List[Tuple[str, Set[str], float, timedelta]], output_file: str = 'drone_route.html'):
         """
         Visualize the route on a map.
@@ -263,15 +279,45 @@ class DronePlanner:
                     icon=folium.Icon(color='blue', icon='info-sign')
                 ).add_to(m)
             
-            # Draw route line
-            if i < len(route) - 1:
-                next_capital = route[i + 1][0]
+            # Desenhar linhas entre as cidades visitadas (vermelho)
+            cities_list = list(cities_visited)
+            cities_coords = [self.flooded_cities[city] for city in cities_list]
+            start_capital_coord = self.capitals[capital]
+            ordered_coords = self._nearest_neighbor_order(start_capital_coord, cities_coords)
+            if ordered_coords:
+                # Linha da capital até a primeira cidade
                 folium.PolyLine(
-                    [self.capitals[capital], self.capitals[next_capital]],
+                    [start_capital_coord, ordered_coords[0]],
                     color='red',
                     weight=2,
                     opacity=0.8,
-                    popup=f"Distance: {distance:.1f}km<br>Flight time: {flight_time}"
+                    popup=f"Saída da capital {capital}"
+                ).add_to(m)
+                # Linhas entre cidades
+                for j in range(len(ordered_coords) - 1):
+                    folium.PolyLine(
+                        [ordered_coords[j], ordered_coords[j + 1]],
+                        color='red',
+                        weight=2,
+                        opacity=0.8,
+                        popup=f"De cidade para cidade"
+                    ).add_to(m)
+            else:
+                ordered_coords = []
+            # Linha amarela do último ponto visitado até a próxima capital (reabastecimento)
+            if i < len(route) - 1:
+                next_capital = route[i + 1][0]
+                next_capital_coord = self.capitals[next_capital]
+                if ordered_coords:
+                    last_city_coord = ordered_coords[-1]
+                else:
+                    last_city_coord = start_capital_coord
+                folium.PolyLine(
+                    [last_city_coord, next_capital_coord],
+                    color='yellow',
+                    weight=2,
+                    opacity=0.8,
+                    popup=f"Reabastecimento na capital {next_capital}"
                 ).add_to(m)
         
         # Save map
