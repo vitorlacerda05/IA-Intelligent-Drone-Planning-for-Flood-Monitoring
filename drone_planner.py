@@ -19,6 +19,7 @@ class DronePlanner:
         self.max_range = max_range
         self.speed = speed  # km/h
         self.df = pd.read_excel(data_file)
+        self.df = self.df.sample(50) 
         
         # Extract coordinates from localidade column
         self.df['lat'] = self.df['localidade'].apply(lambda x: float(x.split(',')[0]))
@@ -140,98 +141,94 @@ class DronePlanner:
         
         return possible_legs
 
-    def heuristic(self, visited_cities: FrozenSet[str]) -> float:
+    def heuristic_astar(self, visited: frozenset) -> int:
         """
-        Heuristic function estimating remaining legs needed.
-        
-        Args:
-            visited_cities: Set of visited cities
-            
-        Returns:
-            Estimated number of remaining legs
+        Heurística para o A*: estima o número de paradas de reabastecimento restantes
+        baseada no número de cidades não visitadas dividido pela média de cidades por trecho.
         """
-        remaining_cities = len(self.flooded_cities) - len(visited_cities)
-        return ceil(remaining_cities / self.estimated_cities_per_leg)
+        cidades_restantes = len(self.flooded_cities) - len(visited)
+        return int(np.ceil(cidades_restantes / self.estimated_cities_per_leg))
 
-    def find_optimal_route(self, start_capital: str) -> Tuple[List[Tuple[str, Set[str], float, timedelta]], int]:
+    def find_optimal_route(self, start_capital: str) -> tuple:
         """
-        Find optimal route using A* algorithm.
+        Algoritmo A* para planejar a rota do drone:
+        - Maximiza o número de cidades visitadas
+        - Minimiza o número de paradas para reabastecimento
+        - Usa f(n) = g(n) + h(n), onde:
+            g(n): número de paradas de reabastecimento já realizadas
+            h(n): estimativa de paradas restantes (heurística)
+        """
+        from heapq import heappush, heappop
+        max_range = self.max_range
+        flooded_cities = self.flooded_cities
+        capitals = self.capitals
+        all_cities = set(flooded_cities.keys())
+        start_coord = capitals[start_capital]
         
-        Args:
-            start_capital: Starting capital city
-            
-        Returns:
-            Tuple of (route, total_cities_visited)
-        """
-        # Priority queue for A* search
+        # Estado: (posição_atual, cidades_visitadas, autonomia_restante, capital_atual, caminho, paradas)
+        initial_state = (start_coord, frozenset(), max_range, start_capital, [], 0)
+        
+        # Fila de prioridade: (f(n), -cidades_visitadas, paradas, estado)
         open_list = []
-        # Set of visited states
-        closed_set = set()
-        # Dictionary to store best path to each state
-        came_from = {}
-        # Dictionary to store g scores
         g_score = {}
+        state_id = (start_coord, frozenset(), max_range, start_capital)
+        g_score[state_id] = 0
+        f_score = g_score[state_id] + self.heuristic_astar(frozenset())
+        heappush(open_list, (f_score, 0, 0, initial_state))
         
-        # Initial state
-        initial_state = (start_capital, frozenset())
-        g_score[initial_state] = 0
-        f_score = self.heuristic(frozenset())
-        
-        # Add initial state to open list
-        heappush(open_list, (f_score, id(initial_state), initial_state))
-        
-        best_state = initial_state
-        best_cities_visited = 0
+        best_visited = set()
+        best_path = []
+        best_paradas = float('inf')
+        visited_states = dict()
         
         while open_list:
-            # Get state with lowest f score
-            _, _, current_state = heappop(open_list)
-            current_capital, visited_cities = current_state
+            f, neg_cities, paradas, state = heappop(open_list)
+            pos, visited, autonomia, capital_atual, caminho, paradas = state
             
-            # Skip if already visited
-            if current_state in closed_set:
-                continue
-                
-            # Update best state if this one visits more cities
-            if len(visited_cities) > best_cities_visited:
-                best_state = current_state
-                best_cities_visited = len(visited_cities)
+            # Atualiza melhor solução
+            if len(visited) > len(best_visited) or (len(visited) == len(best_visited) and paradas < best_paradas):
+                best_visited = visited
+                best_path = caminho
+                best_paradas = paradas
             
-            # Add to closed set
-            closed_set.add(current_state)
+            # Se já visitou todas as cidades, pode parar
+            if len(visited) == len(all_cities):
+                break
             
-            # Generate possible next legs
-            for next_capital, cities_to_visit, distance, flight_time in self.get_possible_legs(current_capital, visited_cities):
-                # Create new state
-                new_visited = visited_cities.union(cities_to_visit)
-                new_state = (next_capital, new_visited)
-                
-                # Calculate new g score
-                tentative_g = g_score[current_state] + 1
-                
-                # If this is a better path to the state
-                if new_state not in g_score or tentative_g < g_score[new_state]:
-                    came_from[new_state] = (current_state, distance, flight_time)
-                    g_score[new_state] = tentative_g
-                    f_score = tentative_g + self.heuristic(new_visited)
-                    
-                    # Add to open list if not in closed set
-                    if new_state not in closed_set:
-                        heappush(open_list, (f_score, id(new_state), new_state))
-        
-        # Reconstruct path
-        route = []
-        current = best_state
-        while current in came_from:
-            prev, distance, flight_time = came_from[current]
-            current_capital, visited_cities = current
-            prev_capital, prev_visited = prev
-            cities_visited = visited_cities - prev_visited
-            route.append((current_capital, cities_visited, distance, flight_time))
-            current = prev
-        
-        route.reverse()
-        return route, best_cities_visited
+            # 1. Tentar visitar cidades não visitadas dentro da autonomia
+            for city, city_coord in flooded_cities.items():
+                if city in visited:
+                    continue
+                dist = self.haversine_distance(pos, city_coord)
+                if dist <= autonomia:
+                    novo_visited = visited | {city}
+                    novo_autonomia = autonomia - dist
+                    novo_caminho = caminho + [("cidade", city, city_coord, novo_autonomia)]
+                    novo_state = (city_coord, novo_visited, novo_autonomia, capital_atual, novo_caminho, paradas)
+                    state_id = (city_coord, novo_visited, round(novo_autonomia, 2), capital_atual)
+                    g = paradas
+                    h = self.heuristic_astar(novo_visited)
+                    f = g + h
+                    if state_id not in visited_states or len(novo_visited) > len(visited_states[state_id]):
+                        visited_states[state_id] = novo_visited
+                        heappush(open_list, (f, -len(novo_visited), paradas, novo_state))
+            # 2. Se autonomia não permite mais cidades, tentar reabastecer em qualquer capital (exceto onde já está)
+            for cap, cap_coord in capitals.items():
+                if cap == capital_atual:
+                    continue
+                dist = self.haversine_distance(pos, cap_coord)
+                if dist <= autonomia:
+                    novo_autonomia = max_range
+                    novo_caminho = caminho + [("reabastecimento", cap, cap_coord, max_range)]
+                    novo_state = (cap_coord, visited, max_range, cap, novo_caminho, paradas + 1)
+                    state_id = (cap_coord, visited, max_range, cap)
+                    g = paradas + 1
+                    h = self.heuristic_astar(visited)
+                    f = g + h
+                    if state_id not in visited_states or len(visited) > len(visited_states[state_id]):
+                        visited_states[state_id] = visited
+                        heappush(open_list, (f, -len(visited), paradas + 1, novo_state))
+        return best_path, len(best_visited)
 
     def _nearest_neighbor_order(self, start_coord, cities_coords):
         """
@@ -249,76 +246,94 @@ class DronePlanner:
             current = next_city
         return ordered
 
-    def visualize_route(self, route: List[Tuple[str, Set[str], float, timedelta]], output_file: str = 'drone_route.html'):
+    def visualize_route(self, path: list, output_file: str = 'drone_route.html'):
         """
-        Visualize the route on a map.
-        
+        Visualiza o caminho retornado pelo novo A*.
         Args:
-            route: List of (capital, cities_visited, distance, flight_time) tuples
-            output_file: Output HTML file path
+            path: lista de tuplas ("cidade" ou "reabastecimento", nome, coord, autonomia_restante)
+            output_file: arquivo HTML de saída
         """
-        # Create map centered on Brazil
+        import folium
         m = folium.Map([-14.5931291, -56.6985808], zoom_start=4)
-        
-        # Add capitals
+        # Marcar capitais
         for capital, coord in self.capitals.items():
             folium.Marker(
                 coord,
                 popup=f"Capital: {capital}",
                 icon=folium.Icon(color='red', icon='info-sign')
             ).add_to(m)
-        
-        # Add visited cities and draw routes
-        for i, (capital, cities_visited, distance, flight_time) in enumerate(route):
-            # Add cities
-            for city in cities_visited:
-                coord = self.flooded_cities[city]
+        # Marcar cidades visitadas
+        for step in path:
+            tipo, nome, coord, autonomia = step
+            if tipo == "cidade":
                 folium.Marker(
                     coord,
-                    popup=f"City: {city}",
+                    popup=f"Cidade: {nome}",
                     icon=folium.Icon(color='blue', icon='info-sign')
                 ).add_to(m)
-            
-            # Desenhar linhas entre as cidades visitadas (vermelho)
-            cities_list = list(cities_visited)
-            cities_coords = [self.flooded_cities[city] for city in cities_list]
-            start_capital_coord = self.capitals[capital]
-            ordered_coords = self._nearest_neighbor_order(start_capital_coord, cities_coords)
-            if ordered_coords:
-                # Linha da capital até a primeira cidade
+        # Desenhar rotas
+        for i in range(1, len(path)):
+            tipo_ant, nome_ant, coord_ant, _ = path[i-1]
+            tipo, nome, coord, _ = path[i]
+            if tipo == "cidade" and tipo_ant == "cidade":
+                # Linha vermelha entre cidades
                 folium.PolyLine(
-                    [start_capital_coord, ordered_coords[0]],
+                    [coord_ant, coord],
                     color='red',
                     weight=2,
                     opacity=0.8,
-                    popup=f"Saída da capital {capital}"
+                    popup=f"De {nome_ant} para {nome}"
                 ).add_to(m)
-                # Linhas entre cidades
-                for j in range(len(ordered_coords) - 1):
-                    folium.PolyLine(
-                        [ordered_coords[j], ordered_coords[j + 1]],
-                        color='red',
-                        weight=2,
-                        opacity=0.8,
-                        popup=f"De cidade para cidade"
-                    ).add_to(m)
-            else:
-                ordered_coords = []
-            # Linha amarela do último ponto visitado até a próxima capital (reabastecimento)
-            if i < len(route) - 1:
-                next_capital = route[i + 1][0]
-                next_capital_coord = self.capitals[next_capital]
-                if ordered_coords:
-                    last_city_coord = ordered_coords[-1]
-                else:
-                    last_city_coord = start_capital_coord
+            elif tipo == "reabastecimento":
+                # Linha amarela do último ponto até a capital
                 folium.PolyLine(
-                    [last_city_coord, next_capital_coord],
+                    [coord_ant, coord],
                     color='yellow',
-                    weight=2,
+                    weight=3,
                     opacity=0.8,
-                    popup=f"Reabastecimento na capital {next_capital}"
+                    popup=f"Reabastecimento em {nome}"
                 ).add_to(m)
-        
-        # Save map
-        m.save(output_file) 
+        m.save(output_file)
+
+    def greedy_route(self, start_capital: str):
+        """
+        Estratégia gulosa: sempre visita a cidade mais próxima dentro da autonomia restante.
+        Quando não for possível, vai para a capital mais próxima para reabastecer.
+        """
+        current_pos = self.capitals[start_capital]
+        current_capital = start_capital
+        autonomy = self.max_range
+        visited = set()
+        path = []
+        flooded_cities = self.flooded_cities.copy()
+        capitals = self.capitals
+
+        while len(visited) < len(flooded_cities):
+            # Cidades não visitadas e dentro da autonomia
+            candidates = [
+                (city, coord, self.haversine_distance(current_pos, coord))
+                for city, coord in flooded_cities.items()
+                if city not in visited and self.haversine_distance(current_pos, coord) <= autonomy
+            ]
+            if candidates:
+                # Escolhe a cidade mais próxima
+                city, coord, dist = min(candidates, key=lambda x: x[2])
+                path.append(("cidade", city, coord, autonomy - dist))
+                autonomy -= dist
+                current_pos = coord
+                visited.add(city)
+            else:
+                # Não há cidades acessíveis, vai para a capital mais próxima para reabastecer
+                capitals_candidates = [
+                    (cap, coord, self.haversine_distance(current_pos, coord))
+                    for cap, coord in capitals.items()
+                    if cap != current_capital and self.haversine_distance(current_pos, coord) <= autonomy
+                ]
+                if not capitals_candidates:
+                    break  # Não há como reabastecer, termina
+                cap, coord, dist = min(capitals_candidates, key=lambda x: x[2])
+                path.append(("reabastecimento", cap, coord, self.max_range))
+                autonomy = self.max_range
+                current_pos = coord
+                current_capital = cap
+        return path, len(visited) 

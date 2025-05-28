@@ -21,27 +21,21 @@ def main():
     # Print results
     print(f"\nOptimal route found:")
     print(f"Total cities visited: {total_cities}")
-    print(f"Number of legs: {len(route)}")
+    print(f"Number of steps: {len(route)}")
     
     total_distance = 0
-    total_time = timedelta()
-    
     print("\nRoute details:")
-    for i, (capital, cities, distance, flight_time) in enumerate(route, 1):
-        total_distance += distance
-        total_time += flight_time
-        
-        print(f"\nLeg {i}:")
-        print(f"From: {capital}")
-        print(f"Distance: {distance:.1f} km")
-        print(f"Flight time: {format_timedelta(flight_time)}")
-        print(f"Cities visited: {len(cities)}")
-        for city in cities:
-            print(f"  - {city}")
-    
+    for i, step in enumerate(route, 1):
+        tipo, nome, coord, autonomia = step
+        if i > 1:
+            _, _, prev_coord, _ = route[i-2]
+            total_distance += planner.haversine_distance(prev_coord, coord)
+        if tipo == "cidade":
+            print(f"{i}. Visitou cidade: {nome} (autonomia restante: {autonomia:.1f} km)")
+        elif tipo == "reabastecimento":
+            print(f"{i}. Reabasteceu em: {nome} (autonomia restaurada para {autonomia:.1f} km)")
     print(f"\nTotal distance: {total_distance:.1f} km")
-    print(f"Total flight time: {format_timedelta(total_time)}")
-    print(f"Average cities per leg: {total_cities/len(route):.1f}")
+    print(f"Average cities per step: {total_cities/len(route):.2f}")
     
     # Visualize the route
     planner.visualize_route(route, 'drone_route.html')
