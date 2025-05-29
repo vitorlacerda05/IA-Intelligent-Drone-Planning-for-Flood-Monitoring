@@ -5,7 +5,7 @@
 ### Overview
 This project implements an intelligent drone route planning system for monitoring flood-affected cities in Brazil. The system uses a greedy algorithm to optimize drone routes, considering factors such as maximum autonomy, city priorities, and efficient refueling stops.
 
-
+[Link to Interactive Map](https://vitorlacerda05.github.io/IA-Intelligent-Drone-Planning-for-Flood-Monitoring/rota_drone.html)
 
 ### Features
 - **Intelligent Route Planning**: Optimizes drone routes to maximize coverage of flood-affected cities
