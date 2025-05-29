@@ -41,7 +41,6 @@ CAPITAIS = [
 # =====================
 AUTONOMIA_MAX = 750.0  # km
 MAX_ITERATIONS = 10000
-CAPITAL_INICIAL = "São Paulo"
 
 # =====================
 # 3. Função de Distância Haversine
@@ -105,7 +104,7 @@ def drone_planning():
     iter_count = 0
     
     # Começa em SP
-    capital_atual = next(c for c in CAPITAIS if c["nome"] == CAPITAL_INICIAL)
+    capital_atual = next(c for c in CAPITAIS if c["nome"] == "São Paulo")
     pos_atual = {"lat": capital_atual["lat"], "lon": capital_atual["lon"]}
     autonomia_restante = AUTONOMIA_MAX
     
@@ -261,12 +260,74 @@ def plotar_rota_folium(caminho, cidades_visitadas, reabastecimentos):
 # =====================
 # 8. Execução Principal
 # =====================
-if __name__ == "__main__":
-    caminho, n_cidades, n_reabastecimentos = drone_planning()
+def encontrar_melhor_capital_inicial(all_flood_cities):
+    melhor_capital = None
+    melhor_score = -1
+    melhor_cidades = -1
+    melhor_resultado = None
+    for capital in CAPITAIS:
+        caminho, cidades_visitadas, n_reabastecimentos = drone_planning_custom_inicio(all_flood_cities, capital['nome'])
+        cidades = len(cidades_visitadas)
+        reab = n_reabastecimentos if n_reabastecimentos > 0 else 1
+        score = cidades / reab
+        # Prioriza maior score, depois maior número absoluto de cidades
+        if score > melhor_score or (score == melhor_score and cidades > melhor_cidades):
+            melhor_score = score
+            melhor_capital = capital['nome']
+            melhor_cidades = cidades
+            melhor_resultado = (caminho, cidades_visitadas, n_reabastecimentos)
+    return melhor_capital, melhor_resultado
+
+def drone_planning_custom_inicio(all_flood_cities, capital_nome):
+    caminho = []
     cidades_visitadas = set()
-    for tipo, origem, destino, dist in caminho:
-        if tipo == "vermelha":
-            idx = next((i for i, c in enumerate(all_flood_cities) if c["lat"] == destino["lat"] and c["lon"] == destino["lon"]), None)
-            if idx is not None:
-                cidades_visitadas.add(idx)
-    plotar_rota_folium(caminho, cidades_visitadas, n_reabastecimentos) 
+    reabastecimentos = 0
+    iter_count = 0
+    capital_atual = next(c for c in CAPITAIS if c["nome"] == capital_nome)
+    pos_atual = {"lat": capital_atual["lat"], "lon": capital_atual["lon"]}
+    autonomia_restante = AUTONOMIA_MAX
+    while len(cidades_visitadas) < len(all_flood_cities) and iter_count < MAX_ITERATIONS:
+        iter_count += 1
+        idx, cidade, dist = encontrar_cidade_mais_proxima(pos_atual, all_flood_cities, cidades_visitadas)
+        if cidade is None:
+            break
+        if dist <= autonomia_restante:
+            caminho.append(("vermelha", pos_atual, cidade, dist))
+            cidades_visitadas.add(idx)
+            pos_atual = cidade
+            autonomia_restante -= dist
+        else:
+            capital_proxima, dist_cap = encontrar_capital_mais_proxima(pos_atual, CAPITAIS)
+            pode_visitar_apos_reabastecer = False
+            for i, c in enumerate(all_flood_cities):
+                if i in cidades_visitadas:
+                    continue
+                dist_da_capital = haversine((capital_proxima["lat"], capital_proxima["lon"]), (c["lat"], c["lon"]))
+                if dist_da_capital <= AUTONOMIA_MAX:
+                    pode_visitar_apos_reabastecer = True
+                    break
+            if not pode_visitar_apos_reabastecer:
+                caminho.append(("azul", pos_atual, capital_proxima, dist_cap))
+                pos_atual = {"lat": capital_proxima["lat"], "lon": capital_proxima["lon"]}
+                break
+            caminho.append(("azul", pos_atual, capital_proxima, dist_cap))
+            pos_atual = {"lat": capital_proxima["lat"], "lon": capital_proxima["lon"]}
+            autonomia_restante = AUTONOMIA_MAX
+            reabastecimentos += 1
+    capital_final, dist_final = encontrar_capital_mais_proxima(pos_atual, CAPITAIS)
+    if pos_atual["lat"] != capital_final["lat"] or pos_atual["lon"] != capital_final["lon"]:
+        caminho.append(("azul", pos_atual, capital_final, dist_final))
+    return caminho, cidades_visitadas, reabastecimentos
+
+def main():
+    df = pd.read_excel("database/alagamentos-filtred.xlsx")
+    all_flood_cities = [
+        {"lat": row["lat"], "lon": row["long"]} for _, row in df.iterrows()
+    ]
+    melhor_capital, melhor_resultado = encontrar_melhor_capital_inicial(all_flood_cities)
+    print(f"Melhor capital inicial: {melhor_capital}")
+    caminho, cidades_visitadas, n_reabastecimentos = melhor_resultado
+    plotar_rota_folium(caminho, cidades_visitadas, n_reabastecimentos)
+
+if __name__ == "__main__":
+    main() 
