@@ -1,7 +1,11 @@
 # Intelligent Drone Planning for Flood Monitoring using AI
 
+![Flood Monitoring](database/image-flood.PNG)
+
 ### Overview
 This project implements an intelligent drone route planning system for monitoring flood-affected cities in Brazil. The system uses a greedy algorithm to optimize drone routes, considering factors such as maximum autonomy, city priorities, and efficient refueling stops.
+
+
 
 ### Features
 - **Intelligent Route Planning**: Optimizes drone routes to maximize coverage of flood-affected cities
